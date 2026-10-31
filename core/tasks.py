@@ -1,4 +1,5 @@
 """主任务 — 边滚动好友列表边匹配目标，找到立即发消息"""
+import os
 import traceback
 import json
 import time
@@ -74,6 +75,39 @@ def handle_response_for_map(resp, mapping):
         pass
 
 
+def _dump_visible_names(page, logger):
+    """诊断：把列表里实际渲染出的昵称打印到日志（字符用·分隔，避免 GitHub Secret 打码）"""
+    try:
+        names = page.evaluate("""
+        () => {
+            var out = [];
+            var spans = document.querySelectorAll('[class*="item-header-name-"]');
+            for (var i = 0; i < spans.length && i < 30; i++) out.push(spans[i].textContent);
+            return out;
+        }
+        """)
+        pretty = " | ".join("·".join(list(str(n))) for n in names)
+        logger.info(f"诊断-列表渲染出的昵称(·为分隔): {pretty}")
+    except Exception:
+        logger.info("诊断-列表渲染出的昵称: (读取失败)")
+
+
+def _dump_page_state(page, logger):
+    """诊断：保存现场截图、页面地址和标题到 logs/ 目录（会随 artifact 上传）"""
+    try:
+        os.makedirs("logs", exist_ok=True)
+        page.screenshot(path="logs/debug_page.png", full_page=True)
+        logger.info(f"诊断-截图已保存 logs/debug_page.png")
+    except Exception as e:
+        logger.error(f"诊断-截图失败: {e}")
+    try:
+        logger.info(f"诊断-当前页面地址: {page.url}")
+        logger.info(f"诊断-页面标题: {page.title()}")
+    except Exception as e:
+        logger.error(f"诊断-读取页面信息失败: {e}")
+    _dump_visible_names(page, logger)
+
+
 def scroll_and_find(page, mapping, logger):
     """滚动好友列表，拦截 user_detail 收集映射"""
     def on_resp(resp):
@@ -95,22 +129,6 @@ def scroll_and_find(page, mapping, logger):
 
     page.remove_listener("response", on_resp)
     logger.debug(f"收集到 {len(mapping)} 个 short_id 映射")
-
-
-def _dump_visible_names(page, logger):
-    """诊断：把列表里实际渲染出的昵称打印到日志"""
-    try:
-        names = page.evaluate("""
-        () => {
-            var out = [];
-            var spans = document.querySelectorAll('[class*="item-header-name-"]');
-            for (var i = 0; i < spans.length && i < 30; i++) out.push(spans[i].textContent);
-            return out;
-        }
-        """)
-        logger.info(f"当前列表渲染出的昵称: {names}")
-    except Exception:
-        logger.info("当前列表渲染出的昵称: (读取失败)")
 
 
 def try_click_and_send(page, target, mapping, logger):
@@ -194,6 +212,7 @@ def do_user_task(signer, username, targets):
     # 收集映射（失败自动刷新重试，最多 4 次）
     mapping = {}
     for attempt in range(4):
+        logger.info(f"诊断-第 {attempt + 1} 次尝试, 当前页面地址: {page.url}")
         scroll_and_find(page, mapping, logger)
         if mapping:
             break
@@ -205,7 +224,7 @@ def do_user_task(signer, username, targets):
             logger.error(f"刷新页面失败: {e}")
 
     if not mapping:
-        _dump_visible_names(page, logger)
+        _dump_page_state(page, logger)
         logger.warning(f"未收集到好友信息")
         return
 
