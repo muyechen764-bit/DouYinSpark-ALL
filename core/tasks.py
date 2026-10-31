@@ -171,9 +171,18 @@ def do_user_task(signer, username, targets):
     page = signer.page
     logger.info(f"开始处理账号 {username}")
 
-    # 收集映射
+    # 收集映射（失败自动刷新重试，最多 4 次）
     mapping = {}
-    scroll_and_find(page, mapping, logger)
+    for attempt in range(4):
+        scroll_and_find(page, mapping, logger)
+        if mapping:
+            break
+        logger.warning(f"第 {attempt + 1} 次未收集到好友信息，刷新页面重试")
+        try:
+            page.reload(timeout=60000)
+            page.wait_for_timeout(10000)
+        except Exception as e:
+            logger.error(f"刷新页面失败: {e}")
 
     if not mapping:
         logger.warning(f"未收集到好友信息")
