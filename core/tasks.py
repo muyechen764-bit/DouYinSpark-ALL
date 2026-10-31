@@ -16,10 +16,16 @@ groupMatchMode = config.get("groupMatchMode", "name")
 
 _SCROLL_CONTAINER_JS = """
 () => {
-    const el = document.querySelector('[class*="semi-list"]') ||
-               document.querySelector('#sub-app ul');
-    if (el && el.scrollTop + el.clientHeight < el.scrollHeight - 10) {
-        el.scrollTop += 600; return true;
+    var els = document.querySelectorAll('[class*="semi-list"], #sub-app ul');
+    for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        if (el && el.scrollTop + el.clientHeight < el.scrollHeight - 10) {
+            el.scrollTop += 600; return true;
+        }
+    }
+    var w = document.scrollingElement;
+    if (w && w.scrollTop + w.clientHeight < w.scrollHeight - 10) {
+        w.scrollTop += 600; return true;
     }
 }
 """
@@ -91,6 +97,22 @@ def scroll_and_find(page, mapping, logger):
     logger.debug(f"收集到 {len(mapping)} 个 short_id 映射")
 
 
+def _dump_visible_names(page, logger):
+    """诊断：把列表里实际渲染出的昵称打印到日志"""
+    try:
+        names = page.evaluate("""
+        () => {
+            var out = [];
+            var spans = document.querySelectorAll('[class*="item-header-name-"]');
+            for (var i = 0; i < spans.length && i < 30; i++) out.push(spans[i].textContent);
+            return out;
+        }
+        """)
+        logger.info(f"当前列表渲染出的昵称: {names}")
+    except Exception:
+        logger.info("当前列表渲染出的昵称: (读取失败)")
+
+
 def try_click_and_send(page, target, mapping, logger):
     """尝试点击一个目标好友并发送消息。返回 True 如果成功。"""
     info = _match_target(mapping, target, matchMode)
@@ -104,9 +126,13 @@ def try_click_and_send(page, target, mapping, logger):
     # 边滚边找可见元素
     page.evaluate("""
     () => {
-        const el = document.querySelector('[class*="semi-list"]') ||
-                   document.querySelector('#sub-app ul');
-        if (el) el.scrollTop = 0;
+        var els = document.querySelectorAll('[class*="semi-list"], #sub-app ul');
+        for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (el) { el.scrollTop = 0; return; }
+        }
+        var w = document.scrollingElement;
+        if (w) w.scrollTop = 0;
     }
     """)
     time.sleep(0.3)
@@ -116,11 +142,12 @@ def try_click_and_send(page, target, mapping, logger):
         # 检查目标是否可见
         visible = page.evaluate(f"""
         () => {{
-            const spans = document.querySelectorAll('[class*="item-header-name-"]');
-            for (const s of spans) {{
+            var spans = document.querySelectorAll('[class*="item-header-name-"]');
+            for (var i = 0; i < spans.length; i++) {{
+                var s = spans[i];
                 if (s.textContent === {json.dumps(nickname, ensure_ascii=False)} &&
                     s.offsetParent !== null) {{
-                    const r = s.getBoundingClientRect();
+                    var r = s.getBoundingClientRect();
                     return r.top >= 0 && r.bottom <= window.innerHeight;
                 }}
             }}
@@ -131,11 +158,10 @@ def try_click_and_send(page, target, mapping, logger):
             # 找到了，用坐标点击（绕过 Playwright 可见性检查）
             page.evaluate(f"""
             () => {{
-                const spans = document.querySelectorAll('[class*="item-header-name-"]');
-                for (const s of spans) {{
-                    if (s.textContent === {json.dumps(nickname, ensure_ascii=False)}) {{
-                        const r = s.getBoundingClientRect();
-                        s.click();
+                var spans = document.querySelectorAll('[class*="item-header-name-"]');
+                for (var i = 0; i < spans.length; i++) {{
+                    if (spans[i].textContent === {json.dumps(nickname, ensure_ascii=False)}) {{
+                        spans[i].click();
                         return;
                     }}
                 }}
@@ -144,17 +170,11 @@ def try_click_and_send(page, target, mapping, logger):
             clicked = True
             break
 
-        page.evaluate("""
-        () => {
-            const el = document.querySelector('[class*="semi-list"]') ||
-                       document.querySelector('#sub-app ul');
-            if (el && el.scrollTop + el.clientHeight < el.scrollHeight - 10)
-                el.scrollTop += 300;
-        }
-        """)
+        page.evaluate(_SCROLL_CONTAINER_JS.replace("+= 600", "+= 300"))
         time.sleep(0.2)
 
     if not clicked:
+        _dump_visible_names(page, logger)
         logger.warning(f"未找到可见的 {nickname}")
         return False
 
@@ -185,6 +205,7 @@ def do_user_task(signer, username, targets):
             logger.error(f"刷新页面失败: {e}")
 
     if not mapping:
+        _dump_visible_names(page, logger)
         logger.warning(f"未收集到好友信息")
         return
 
@@ -250,9 +271,13 @@ def _send_to_group(page, target, logger):
     # 滚回顶部
     page.evaluate("""
     () => {
-        const el = document.querySelector('[class*="semi-list"]') ||
-                   document.querySelector('#sub-app ul');
-        if (el) el.scrollTop = 0;
+        var els = document.querySelectorAll('[class*="semi-list"], #sub-app ul');
+        for (var i = 0; i < els.length; i++) {
+            var el = els[i];
+            if (el) { el.scrollTop = 0; return; }
+        }
+        var w = document.scrollingElement;
+        if (w) w.scrollTop = 0;
     }
     """)
     time.sleep(0.3)
@@ -262,11 +287,12 @@ def _send_to_group(page, target, logger):
         # 找目标群（名称包含匹配）
         found = page.evaluate("""
         (target) => {
-            const spans = document.querySelectorAll('[class*="item-header-name-"]');
-            for (const s of spans) {
+            var spans = document.querySelectorAll('[class*="item-header-name-"]');
+            for (var i = 0; i < spans.length; i++) {
+                var s = spans[i];
                 if (s.textContent.indexOf(target) >= 0 &&
                     s.offsetParent !== null) {
-                    const r = s.getBoundingClientRect();
+                    var r = s.getBoundingClientRect();
                     if (r.top >= 0 && r.bottom <= window.innerHeight) {
                         s.click();
                         return s.textContent;
@@ -281,14 +307,7 @@ def _send_to_group(page, target, logger):
             clicked = True
             break
 
-        page.evaluate("""
-        () => {
-            const el = document.querySelector('[class*="semi-list"]') ||
-                       document.querySelector('#sub-app ul');
-            if (el && el.scrollTop + el.clientHeight < el.scrollHeight - 10)
-                el.scrollTop += 300;
-        }
-        """)
+        page.evaluate(_SCROLL_CONTAINER_JS.replace("+= 600", "+= 300"))
         time.sleep(0.2)
 
     if not clicked:

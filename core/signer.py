@@ -17,6 +17,7 @@ def _find_chrome():
                 return exe
     return None
 
+
 CHROME_EXE = _find_chrome()
 
 
@@ -36,7 +37,7 @@ class Signer:
                 )
             else:
                 raise
-        ctx = self._browser.new_context(viewport={"width": 1280, "height": 2400})
+        ctx = self._browser.new_context()
         ctx.set_default_navigation_timeout(120000)
         ctx.set_default_timeout(120000)
         page = ctx.new_page()
